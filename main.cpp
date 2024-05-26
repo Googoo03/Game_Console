@@ -2,29 +2,13 @@
 #include "helper.h"
 #include "periph.h"
 #include "serialATmega-1.h"
-#include "spiAVR.h"
 
-#define NUM_TASKS 4
-#define MAX_Q     100
 
-#define SWRESET 0x01
-#define SLPOUT  0x11
-#define COLMOD  0x3A
-#define DISPON  0x29
-#define INVON   0X21
-#define CASET   0x2A
-#define RASET   0x2B
-#define RAMWR   0x2C
 
-typedef void (*func_ptr)(void); 
+#define NUM_TASKS 8 //TODO: Change to the number of tasks being used
 
-typedef struct _queue{
-  signed char front;
-  signed char back;
-  //int items[MAX_Q];
-  func_ptr DrawFct[MAX_Q];
-} queue;
 
+//Task struct for concurrent synchSMs implmentations
 typedef struct _task{
 	signed 	 char state; 		//Task's current state
 	unsigned long period; 		//Task period
@@ -38,152 +22,68 @@ typedef struct _task{
 const unsigned long GCD_PERIOD = 1;//TODO:Set the GCD Period
 
 task tasks[NUM_TASKS]; // declared task array with 5 tasks
-queue q;
 
-enum SCREEN_SM_STATES {SCREEN_INIT,SCREEN_PRINT};
-enum BACKGROUND_SM_STATES {BACKGROUND_INIT,BACKGROUND_DRAW};
-enum PLAYER_SM_STATES {PLAYER_INIT,PLAYER_IDLE};
+enum L_BUTTON_SM_STATES {LBUTTON_INIT,LBOTTON_OFF,LBUTTON_ON};
+enum R_BUTTON_SM_STATES {RBUTTON_INIT,RBOTTON_OFF,RBUTTON_ON};
+enum LED_SM_STATES {LED_INIT, LED_OFF,LED_ON};
 enum JOYSTICK_SM_STATES {JOYSTICK_INIT,JOYSTICK_IDLE};
+enum BUZZER_SM_STATES {BUZZER_INIT,BUZZER_OFF,BUZZER_ON};
+enum STEPMOTOR_SM_STATES {STEPMOTOR_INIT, STEPMOTOR_OFF, STEPMOTOR_FORWARD, STEPMOTOR_BACKWARD};
+enum SERVO_SM_STATES {SERVO_INIT,SERVO_ADJUST};
 
-//////////////GLOBALS/////////////////
+int lerp(int a, int b, double t){
+  return (int)((double)a * t + (double)b*(1-t));
+}
 
-//SPRITES
-uint16_t background_color = 0x001F;
-uint8_t playerX = 64;
-uint8_t playerY = 64;
-uint8_t playerSpeed = 5;
-
-//JOYSTICK
-int joystickThreshold = 100;
-
-
-//////////////////////////////////////
-
-
-bool qFull(){ return !(q.back < MAX_Q);}
-
-bool qEmpty(){ return q.back <= -1;}
-
-void push (void(*draw)()){
-  
-  if(qFull()) return;
-  
-  q.back ++;
-  q.DrawFct[q.back] = draw; //push draw function to queue
-  
+void TimerISR() {
+	for ( unsigned int i = 0; i < NUM_TASKS; i++ ) {                   // Iterate through each task in the task array
+		if ( tasks[i].elapsedTime >= tasks[i].period ) {           // Check if the task is ready to tick
+			tasks[i].state = tasks[i].TickFct(tasks[i].state); // Tick and set the next state for this task
+			tasks[i].elapsedTime = 0;                          // Reset the elapsed time for the next tick
+		}
+		tasks[i].elapsedTime += GCD_PERIOD;                        // Increment the elapsed time by GCD_PERIOD
+	}
 }
 
 
-void pop (){
-  if(qEmpty()) return; //make sure the queue is not empty already
-  
-  //int(*returnfct)() = q.DrawFct[0];
 
-  for(int i = 0; i < q.back; ++i){ //no reason to return front
-    q.DrawFct[i] = q.DrawFct[i+1];
+/*void driveMotor(bool reverse,int steps){
+  //& first to reset pins 2-5 but not 0-1 then | with phase shifted left 2 to assign the right value to pins 2-5
+  if(!reverse){
+    for(int i = 0; i < 8*steps;){
+      PORTB = (PORTB & 0x03) | stages[i%8] << 2;
+      //serial_println(PORTB);
+      i++;
+      //if(i>7)i=0;
+    }
+  }else{
+    for(int i = 8*steps; i >= 0;){
+    PORTB = (PORTB & 0x03) | stages[i%8] << 2;
+    //serial_println(PORTB);
+    i--;
+    //if(i < 0)i=7;
+    }
   }
-  q.back --; //decrement back
-  
-}
+  //PORTB = 0X00;
+}*/
 
-void qInit(){
-  q.front = 0;
-  q.back = -1;
-}
 
-void HardwareReset(){
-  serial_println("hardware reset START");
-  PORTD &= ~(0x40); //reset pin
-  _delay_ms(200);
-  PORTD |= 0x40;
-  _delay_ms(200);
-  serial_println("hardware reset END");
-}
+int stages[8] = {0b0001, 0b0011, 0b0010, 0b0110, 0b0100, 0b1100, 0b1000, 0b1001};//Stepper motor phases
 
-void Send_Command(int command){
-  PORTD &= ~(0x20); //Set A0 pin to 0
-  PORTB &= ~(0x04); //Set CS pin to 0 to select display
-  SPI_SEND(command);
-  PORTB |= (0x04); //Set CS pin to 1 to deselect the display
-}
+//////////////////GLOBALS////////////////////////
+int joystickThreshold = 400;
+bool left_LED = false;
+bool right_LED = false;
+bool buzzer = false;
+bool forward = false;
+bool backward  =false;
 
-void Send_Data(int data){
-  PORTD |= 0x20; //Set A0 pin to 1
-  PORTB &= ~(0x04); //Set CS pin to 0 to select display
-  SPI_SEND(data);
-  PORTB |= (0x04); //Set CS pin to 1 to deselect the display
-}
-
-void set_address_window(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1) {
-	Send_Command(CASET);
-	Send_Data(0x00);
-	Send_Data(x0);
-	Send_Data(0x00);
-	Send_Data(x1);
-
-	Send_Command(RASET);
-	Send_Data(0x00);
-	Send_Data(y0);
-	Send_Data(0x00);
-	Send_Data(y1);
-}
-
-void ST7735_init(){
-  serial_println("run");
-  HardwareReset();
-
-  Send_Command(SWRESET);
-
-  _delay_ms(150);
-  Send_Command(SLPOUT);
-
-  _delay_ms(200);
-  Send_Command(COLMOD);
-  Send_Data(0x05); //for 16 bit color mode. You can pick any color mode you want
-
-  _delay_ms(10);
-  Send_Command(DISPON);
-  serial_println("finished");
-}
-
-void drawScreen() {
-  uint16_t color = background_color;
-  serial_println("set background");
-	set_address_window(0, 0, 130, 130); // Set full screen as the address window
-	Send_Command(RAMWR);
-
-	uint8_t high = color >> 8;
-	uint8_t low = color & 0xFF;
-	for (uint16_t i = 0; i < 128 * 160; i++) {
-		Send_Data(high);
-		Send_Data(low);
-	}
-}
-
-void drawPlayer() {
-  uint16_t color = 0xF800;
-
-  serial_println(playerX);
-  serial_println(playerY);
-	set_address_window(playerX, playerY, playerX+8, playerY+8);
-	Send_Command(RAMWR);
-
-	uint8_t high = color >> 8;
-	uint8_t low = color & 0xFF;
-	for (uint16_t i = 0; i < 64; i++) {
-    //serial_println("draw player!");
-		Send_Data(high);
-		Send_Data(low);
-	}
-}
-
-void dummy(){}
-
+int motor_period = 30;
+int servo_rotation = 3000;
+/////////////////////////////////////////////////
 
 int checkMove(){
   //int joystickThreshold = 256;
-  uint8_t output = 0x00;
-
   int yInput = ADC_read(0);
   int xInput = ADC_read(1);
 
@@ -192,119 +92,103 @@ int checkMove(){
   int xDist = ADC_read(1)-512; //CHANGE ADC READ
       xDist = xDist < 0 ? -xDist : xDist;
   
-  if(yInput > 1023-joystickThreshold) output += 1; //up
-  if(yInput < joystickThreshold) output += 2; //down
-  if(xInput > 1023-joystickThreshold) output += 4; //right
-  if(xInput < joystickThreshold) output += 8; //left MIGHT BE BACKWARDS
-  return output;
+  if(yInput > 1023-joystickThreshold) return 1; //up
+  if(yInput < joystickThreshold) return 0; //down
+  //if(xInput > 1023-joystickThreshold && yDist < joystickThreshold) return 2; //right
+  //if(xInput < joystickThreshold && yDist < joystickThreshold) return 3; //left MIGHT BE BACKWARDS
+  return -1;
 }
 
-/*void drawScreen(uint16_t color){
+//TODO: Create your tick functions for each task
 
-  Send_Command(CASET);
-  Send_Data(0);
-  Send_Data(5); //start column 0
-  Send_Data(0);
-  Send_Data(50); //end column 5
-
-  Send_Command(RASET);
-  Send_Data(0);
-  Send_Data(5); //start row 0
-  Send_Data(0);
-  Send_Data(50); //end row 5
-
-  Send_Command(RAMWR);
-
-  Send_Data(color >> 8);
-  Send_Data(color & 0xFF);
-
-}*/
+int Tick_LButton(int state){
 
 
-void TimerISR() {
-	for ( unsigned int i = 0; i < NUM_TASKS; i++ ) {                   // Iterate through each task in the task array
-		if ( tasks[i].elapsedTime == tasks[i].period ) {           // Check if the task is ready to tick
-			tasks[i].state = tasks[i].TickFct(tasks[i].state); // Tick and set the next state for this task
-			tasks[i].elapsedTime = 0;                          // Reset the elapsed time for the next tick
-		}
-		tasks[i].elapsedTime += GCD_PERIOD;                        // Increment the elapsed time by GCD_PERIOD
-	}
-}
-
-int Tick_Screen(int state){
-
-  switch (state) //state transitions
+  switch (state) //State transitions
   {
-  case SCREEN_INIT:
-    state = SCREEN_PRINT;
+  case LBUTTON_INIT:
+    state = LBOTTON_OFF;
     break;
-  
-  case SCREEN_PRINT:
-    break;  
+  case LBOTTON_OFF:
+    //serial_println(ADC_read(3));
+    if(ADC_read(3) > 512) state = LBUTTON_ON;
+    break;
+  case LBUTTON_ON:
+    if(ADC_read(3) < 512) state = LBOTTON_OFF;
+    break;
   default:
     break;
   }
 
-  switch (state) //state actions
+  switch (state) //State actions
   {
-  case SCREEN_INIT:
+  case LBUTTON_INIT:
     break;
-  
-  case SCREEN_PRINT:
-    while(!qEmpty()){
-      serial_println("FUNCTION");
-      (*q.DrawFct)();
-      pop();
-      if(q.back == -1) break;
+  case LBOTTON_OFF:
+    left_LED = false;
+    break;
+  case LBUTTON_ON:
+    if(!right_LED) left_LED = true;
+    break;
+  default:
+    break;
+  }
+
+  return state;
+}
+
+int Tick_RButton(int state){
+
+  switch (state) //State transitions
+  {
+  case RBUTTON_INIT:
+    state = RBOTTON_OFF;
+    break;
+  case RBOTTON_OFF:
+    //serial_println(ADC_read(3));
+    if(ADC_read(4) > 512) state = RBUTTON_ON;
+    break;
+  case RBUTTON_ON:
+    if(ADC_read(4) < 512) state = RBOTTON_OFF;
+    break;
+  default:
+    break;
+  }
+
+  switch (state) //State actions
+  {
+  case RBUTTON_INIT:
+    break;
+  case RBOTTON_OFF:
+    right_LED = false;
+    break;
+  case RBUTTON_ON:
+    if(!left_LED) right_LED = true;
+    break;
+  default:
+    break;
+  }
+
+  return state;
+}
+
+int Tick_LLED(int state){
+  static int count;
+  //static unsigned char output;
+  switch (state) //state transitions
+  {
+  case LED_INIT:
+    state = LED_OFF;
+    break;
+  case LED_OFF:
+    if(left_LED){
+      state = LED_ON;
+      serial_println("changed to on!");
     }
-    break;  
-  default:
+    count = 0;
     break;
-  }
-
-  return state;
-}
-
-int Tick_Background(int state){
-  static void(*draw)() = &drawScreen;
-  switch (state) //state transitions
-  {
-  case BACKGROUND_INIT: 
-    state = BACKGROUND_DRAW;
-    break;
-  
-  case BACKGROUND_DRAW:
-    break;
-  default:
-    break;
-  }
-
-  switch (state) //state actions
-  {
-  case BACKGROUND_INIT:
-    break;
-  
-  case BACKGROUND_DRAW:
-    serial_println("push bg");
-    push(drawScreen);
-    break;
-  default:
-    break;
-  }
-
-  return state;
-}
-
-int Tick_Player(int state){
-
-  static void(*drawP)() = drawPlayer;
-
-  switch (state) //state transitions
-  {
-  case PLAYER_INIT:
-    state = PLAYER_IDLE;
-    break;
-  case PLAYER_IDLE:
+  case LED_ON:
+    if(!left_LED) state = LED_OFF;
     break;
   
   default:
@@ -313,11 +197,90 @@ int Tick_Player(int state){
 
   switch (state) //state actions
   {
-  case PLAYER_INIT:
+  case LED_INIT:
     break;
-  case PLAYER_IDLE:
-    serial_println("push player");
-    push(drawPlayer);
+  case LED_OFF:
+    PORTB &= (0xFE); //shut off led 3
+    PORTD &= ~(0xA0); //shut off led 1 and 2
+    break;
+  case LED_ON:
+    //serial_println(count);
+    count++;
+    count %= 4;
+
+
+    if(count == 1) PORTB |= (0x01);
+
+    if(count == 2) PORTD |= (0x80); 
+    if(count == 3) PORTD |= (0x20); 
+    if(count == 0){
+      PORTB &= (0xFE); //shut off led 3
+      PORTD &= ~(0xA0); //shut off led 1 and 2
+    }
+
+    /*if(count == 2){ //there must be a better way to do this
+      PORTB |= (0x01);
+      PORTD &= ~(0xA0);
+      serial_println(PORTD);
+    }else if(count == 1){
+      PORTD = (PORTD & 0x5F) | 0x80;
+      PORTB &= ~(0x01);
+      //serial_println(PORTB);
+      serial_println(PORTD);
+    }else if(count == 0){
+      PORTD = (PORTD & 0x5F) | 0x20;
+      PORTB &= ~(0x01);
+      //serial_println(PORTB);
+      serial_println(PORTD);
+    }*/
+    //PORTB |= ~(0x80);
+    break;
+  
+  default:
+    break;
+  }
+
+  return state;
+}
+
+int Tick_RLED(int state){
+  static int count;
+
+  switch (state) //state transitions
+  {
+  case LED_INIT:
+    state = LED_OFF;
+    break;
+  case LED_OFF:
+    if(right_LED){
+      state = LED_ON;
+    }
+    count = 0;
+    break;
+  case LED_ON:
+    if(!right_LED) state = LED_OFF;
+    break;
+  
+  default:
+    break;
+  }
+
+  switch (state) //state actions
+  {
+  case LED_INIT:
+    break;
+  case LED_OFF:
+    PORTD &= ~(0x1C); //shut off led 3
+    break;
+  case LED_ON:
+    //serial_println(count);
+    count++;
+    count %= 4;
+    //PORTB |= ~(0x80);
+    if(count == 1) PORTD |= (0x10); 
+    if(count == 2) PORTD |= (0x08); 
+    if(count == 3) PORTD |= (0x04); 
+    if(count == 0) PORTD &= ~(0x1C); //reset
     break;
   
   default:
@@ -329,45 +292,207 @@ int Tick_Player(int state){
 
 int Tick_Joystick(int state){
 
+  static bool centered_y;
   static int move;
+  static double t;
 
-  switch (state) //state transitions
+  switch(state){ //state transitions
+    case JOYSTICK_INIT:
+      state = JOYSTICK_IDLE;
+      centered_y = false;
+      break;
+    case JOYSTICK_IDLE:
+      break;
+    default:
+      break;
+  }
+
+  switch(state){ //state actions
+    case JOYSTICK_INIT:
+      break;
+    case JOYSTICK_IDLE:
+
+      move = checkMove();
+      //serial_println(ADC_read(2));
+      int yDist = ADC_read(0)-512; //CHANGE ADC READ
+      yDist = yDist < 0 ? -yDist : yDist;
+
+      if(yDist<256){
+        centered_y = true;
+        backward = false;
+        forward = false;
+      }
+
+      if(move != -1 && centered_y) centered_y = false;
+
+      if(move == 0){
+        backward = true;
+      }else if(move == 1){
+        forward = true;
+      }
+
+      servo_rotation = lerp(999,4999,(double)ADC_read(1)/1024.0);
+
+      if(forward || backward){
+        t=((double)yDist-512.0)/(512.0);
+        //t=0.5;
+        //serial_println(t);
+        motor_period = lerp(2,30,(double)yDist/512.0);
+        serial_println(motor_period);
+        motor_period = motor_period < 2 ? 2 : motor_period;
+        motor_period = motor_period > 30 ? 30 : motor_period;
+        tasks[6].period = motor_period;
+      }else{
+        motor_period = 30;
+      }
+
+      //serial_println(backward);
+      //serial_println(forward);
+      buzzer = (ADC_read(2) < 50);
+      break;
+    default:
+      break;
+  }
+
+  return state;
+}
+
+int Tick_Buzzer(int state){
+  static int count;
+
+  switch(state){ //state transitions
+    case BUZZER_INIT:
+      state = BUZZER_OFF;
+      count = 0;
+      break;
+    case BUZZER_OFF:
+
+      if(backward){
+        count ++;
+      }else{count=0;}
+
+      if(buzzer || (backward && count >= 100)){
+        if(backward){
+          TCCR0B = (TCCR0B & 0xF8) | 0x04;//set prescaler to 256
+        }else{
+          TCCR0B = (TCCR0B & 0xF8) | 0x05;//set prescaler to 1024
+        }
+        state = BUZZER_ON;
+        count = 0;
+      }
+      break;
+    case BUZZER_ON:
+      if(backward){
+        count++;
+      }
+
+      if( (!buzzer && !backward) || (backward && count >= 50)){
+        state = BUZZER_OFF;
+        count = 0;
+      }
+      break;
+    default:
+      break;
+  }
+
+  switch(state){ //state transitions
+    case BUZZER_INIT:
+      break;
+    case BUZZER_OFF:
+      OCR0A = 255;
+      
+      //PORTD &= ~(0x40);
+      break;
+    case BUZZER_ON:
+      
+      //serial_println("buzzer on!");
+      OCR0A = 128;
+      //PORTD |= 0x40;
+      break;
+    default:
+      break;
+  }
+
+  return state;
+}
+
+int Tick_StepMotor(int state){
+  static int index;
+  switch (state)
   {
-  case JOYSTICK_INIT:
-    state = JOYSTICK_IDLE;
+  case STEPMOTOR_INIT:
+    index = 0;
+    state = STEPMOTOR_OFF;
     break;
-  case JOYSTICK_IDLE:
+  case STEPMOTOR_OFF:
+    if(forward) state = STEPMOTOR_FORWARD;
+    else if(backward) state = STEPMOTOR_BACKWARD;
     break;
+  case STEPMOTOR_FORWARD:
+    if(!forward) state = STEPMOTOR_OFF;
+    break;
+  case STEPMOTOR_BACKWARD:
+    if(!backward) state = STEPMOTOR_OFF;
+    break;
+  
+  default:
+    break;
+  }
+
+  switch (state)
+  {
+  case STEPMOTOR_INIT:
+    break;
+  case STEPMOTOR_OFF:
+    break;
+  case STEPMOTOR_FORWARD:
+
+    PORTB = (PORTB & 0x03) | stages[index%8] << 2;
+
+    index++;
+    index %= 7;
+
+    break;
+  case STEPMOTOR_BACKWARD:
+    PORTB = (PORTB & 0x03) | stages[index%8] << 2;
+    if(index > 0){
+      index--;
+    }else if(index == 0){
+      index = 7;
+    }
+    
+    break;
+  
+  default:
+    break;
+  }
+
+  return state;
+}
+
+int Tick_Servo(int state){
+
+  switch (state) // state transitions
+  {
+  case SERVO_INIT:
+    state = SERVO_ADJUST;
+    break;
+  case SERVO_ADJUST:
+    break;
+  
   default:
     break;
   }
 
   switch (state) // state actions
   {
-  case JOYSTICK_INIT:
+  case SERVO_INIT:
     break;
-  case JOYSTICK_IDLE:
-    move = checkMove();
-    serial_println(move);
-    if((move & 0x01) == 1){ //up
-      serial_println("UP");
-      playerY += playerSpeed;
-    }
-    if((move & 0x02) == 2){ //down
-      serial_println("DOWN");
-      playerY -= playerSpeed;
-    }
-    if((move & 0x04) == 4){ //right
-      serial_println("RIGHT");
-      playerX -= playerSpeed;
-    }
-    if((move & 0x08) == 8){ //left
-      serial_println("LEFT");
-      playerX += playerSpeed;
-    }
-    playerX %= 130;
-    playerY %= 130;
+  case SERVO_ADJUST:
+    OCR1A = servo_rotation;
+    //servo_rotation += 5;
     break;
+  
   default:
     break;
   }
@@ -376,59 +501,99 @@ int Tick_Joystick(int state){
 }
 
 int main(void) {
-    //TODO: initialize all your inputs and ouputs
-    DDRB = 0xFF; PORTB = 0x00;
-    
-    DDRD = 0xFF; PORTD = 0x00;
+  //TODO: initialize all your inputs and ouputs
 
-    DDRC = 0x00; PORTC = 0xFF; //Set PORTC to all inputs
+  DDRC = 0x00; PORTC = 0xFF;
+  DDRD = 0xFF; PORTD = 0x00;
+  DDRB = 0xFF; PORTB = 0x00;
 
-    ADC_init();   // initializes ADC
-    serial_init(9600);
-    SPI_INIT();
+  ADC_init();   // initializes ADC
+  serial_init(9600);
 
-    ST7735_init();
-    qInit();
+  //TODO: Initialize the buzzer timer/pwm(timer0)
+  TCCR0A |= (1 << COM0A1);// use Channel A
+  TCCR0A |= (1 << WGM01) | (1 << WGM00);// set fast PWM Mode
+  //TCCR0B = (TCCR0B & 0xF8) | 0x02; //set prescaler to 8
+  //TCCR0B = (TCCR0B & 0xF8) | 0x03;//set prescaler to 64
+  TCCR0B = (TCCR0B & 0xF8) | 0x04;//set prescaler to 256
+  TCCR0B = (TCCR0B & 0xF8) | 0x05;//set prescaler to 1024
 
-    background_color = 0x5555;
-    drawScreen();
-    background_color = 0x001F;
-    //TODO: Initialize tasks here
-    // e.g. tasks[0].period = TASK1_PERIOD
-    // tasks[0].state = ...
-    // tasks[0].timeElapsed = ...
-    // tasks[0].TickFct = &task1_tick_function;
+  //TODO: Initialize the servo timer/pwm(timer1)
+  TCCR1A |= (1 << WGM11) | (1 << COM1A1); //COM1A1 sets it to channel A
+  TCCR1B |= (1 << WGM12) | (1 << WGM13) | (1 << CS11); //CS11 sets the prescaler to be 8
+  //WGM11, WGM12, WGM13 set timer to fast pwm mode
 
-    
+  ICR1 = 39999; //20ms pwm period
 
-    //background
-    tasks[0].period = 100;
-    tasks[0].state = BACKGROUND_INIT;
-    tasks[0].elapsedTime = 0;
-    tasks[0].TickFct = &Tick_Background;
+  OCR1A =  servo_rotation;
 
-    //player
-    tasks[1].period = 100;
-    tasks[1].state = PLAYER_INIT;
-    tasks[1].elapsedTime = 0;
-    tasks[1].TickFct = &Tick_Player;
+  //TODO: Initialize tasks here
+  // e.g. 
+  // tasks[0].period = ;
+  // tasks[0].state = ;
+  // tasks[0].elapsedTime = ;
+  // tasks[0].TickFct = ;
 
-    //screen manager
-    tasks[2].period = 100;
-    tasks[2].state = SCREEN_INIT;
-    tasks[2].elapsedTime = 0;
-    tasks[2].TickFct = &Tick_Screen;
+  //L_Button Task
+  tasks[0].period = 20;
+  tasks[0].state = LBUTTON_INIT;
+  tasks[0].elapsedTime = 0;
+  tasks[0].TickFct = &Tick_LButton;
 
-    //joystick
-    tasks[3].period = 100;
-    tasks[3].state = JOYSTICK_INIT;
-    tasks[3].elapsedTime = 0;
-    tasks[3].TickFct = &Tick_Joystick;
+  //R_Button Task
+  tasks[1].period = 20;
+  tasks[1].state = RBUTTON_INIT;
+  tasks[1].elapsedTime = 0;
+  tasks[1].TickFct = &Tick_RButton;
 
-    TimerSet(GCD_PERIOD);
-    TimerOn();
+  //Left LED Sequence
+  tasks[2].period = 500;
+  tasks[2].state = RBUTTON_INIT;
+  tasks[2].elapsedTime = 0;
+  tasks[2].TickFct = &Tick_LLED;
 
-    while (1) {}
+  //Right LED Sequence
+  tasks[3].period = 500;
+  tasks[3].state = RBUTTON_INIT;
+  tasks[3].elapsedTime = 0;
+  tasks[3].TickFct = &Tick_RLED;
 
-    return 0;
+  //Joystick
+  tasks[4].period = 20;
+  tasks[4].state = JOYSTICK_INIT;
+  tasks[4].elapsedTime = 0;
+  tasks[4].TickFct = &Tick_Joystick;
+
+  //Buzzer
+  tasks[5].period = 20;
+  tasks[5].state = BUZZER_INIT;
+  tasks[5].elapsedTime = 0;
+  tasks[5].TickFct = &Tick_Buzzer;
+
+  //Step Motor
+  tasks[6].period = motor_period;
+  tasks[6].state = STEPMOTOR_INIT;
+  tasks[6].elapsedTime = 0;
+  tasks[6].TickFct = &Tick_StepMotor;
+
+  //Servo Motor
+  tasks[7].period = 5;
+  tasks[7].state = SERVO_INIT;
+  tasks[7].elapsedTime = 0;
+  tasks[7].TickFct = &Tick_Servo;
+
+
+  TimerSet(GCD_PERIOD);
+  TimerOn();
+
+  while (1) {
+    /*
+    serial_println("left:");
+    serial_println(left_LED);
+    serial_println("right:");
+    serial_println(right_LED);
+    */
+  }
+
+  return 0;
 }
