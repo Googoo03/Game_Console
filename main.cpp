@@ -167,6 +167,7 @@ void drawScreen() {
 
 	uint8_t high;
 	uint8_t low;
+  uint16_t color_change = 0xFFE0;
   for(uint16_t k = 0; k < res*res; ++k){
 
     double perlinValue = map_perlin[k];
@@ -176,13 +177,17 @@ void drawScreen() {
 
     for (uint16_t i = 0; i < 64; i++) { //per sprite
       
-      color = tileset[0][i];
+      //color = tileset[0][i];
 
       if(perlinValue*100 > 0){
-        color &= 0x08FF;
+        color = tileset[1][i];
+        //color_change = 0x08FF;
       }else{
-        color &= 0xFFE0;
+        color = tileset[0][i];
+        //color_change = 0xFFE0;
       }
+
+      if(color == WHITE) color &= color_change;
 
       int x = ((i%8)*scale)+((k%8)*8*scale);
       int y = ((i/8)*scale)+((k/8)*8*scale);
@@ -198,6 +203,7 @@ void drawScreen() {
       //if(color == 0xFFFF) continue; //WE SKIP PURE WHITE. IT IS DESIGNATED AS ALPHA
     }
   }
+  return;
 }
 
 void drawPlayer() {
@@ -220,8 +226,8 @@ void drawPlayer() {
       Send_Data(high);
 		  Send_Data(low);
     }
-    //if(color == 0xFFFF) continue; //WE SKIP PURE WHITE. IT IS DESIGNATED AS ALPHA
 	}
+  return;
 }
 
 void clearSprite() { //replaces the sprite with the background
@@ -241,7 +247,7 @@ void clearSprite() { //replaces the sprite with the background
 	}
 }
 
-void dummy(){}
+void dummy(){return;}
 
 
 int checkMove(){
@@ -262,27 +268,6 @@ int checkMove(){
   if(xInput < joystickThreshold) output += 8; //left MIGHT BE BACKWARDS
   return output;
 }
-
-/*void drawScreen(uint16_t color){
-
-  Send_Command(CASET);
-  Send_Data(0);
-  Send_Data(5); //start column 0
-  Send_Data(0);
-  Send_Data(50); //end column 5
-
-  Send_Command(RASET);
-  Send_Data(0);
-  Send_Data(5); //start row 0
-  Send_Data(0);
-  Send_Data(50); //end row 5
-
-  Send_Command(RAMWR);
-
-  Send_Data(color >> 8);
-  Send_Data(color & 0xFF);
-
-}*/
 
 
 void TimerISR() {
