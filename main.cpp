@@ -70,7 +70,6 @@ uint8_t playerSpeed = 5;
 int joystickThreshold = 100;
 int move;
 
-
 //////////////////////////////////////
 
 
@@ -247,6 +246,20 @@ void clearSprite() { //replaces the sprite with the background
 	}
 }
 
+void changeBackground(uint8_t dir){
+
+  world_y += ((dir & 0x08) == 0x08)*8;    //up
+  world_y += ((dir & 0x04) == 0x04)*-8; //down
+
+  world_x += ((dir & 0x02) == 0x02)*8;      //right
+  world_x += ((dir & 0x01) == 0x01) * -8; //left
+  
+  generate = true;
+  generateMap();
+  //might need to add generate function
+  return;
+}
+
 void dummy(){return;}
 
 
@@ -375,7 +388,9 @@ int Tick_Player(int state){
 }
 
 int Tick_Joystick(int state){
-
+  static uint8_t bounds;
+  static uint16_t xMOD;
+  static uint16_t yMOD;
   switch (state) //state transitions
   {
   case JOYSTICK_INIT:
@@ -392,6 +407,9 @@ int Tick_Joystick(int state){
   case JOYSTICK_INIT:
     break;
   case JOYSTICK_IDLE:
+
+
+    ////////CHECK PLAYER MOVE DIRECTION
     move = checkMove();
     if((move & 0x01) == 1){ //up
       playerY += playerSpeed;
@@ -405,8 +423,31 @@ int Tick_Joystick(int state){
     if((move & 0x08) == 8){ //left
       playerX += playerSpeed;
     }
+    ///////////////////////////////////
+
+    ////////CHECK IF PLAYER IS OUT OF BOUNDS///////////
+    bounds = 0x00;
+    xMOD = playerX % 130;
+    yMOD = playerY % 130;
+
+    if(xMOD > 60 && xMOD != playerX){
+      bounds += 0x01; //left go to right
+    }else if(xMOD < 60 && xMOD != playerX){
+      bounds += 0x02; //right go to left
+    }
+
+    if(yMOD > 60 && yMOD != playerY){
+      bounds += 0x04; //down go to up
+    }else if(yMOD < 60 && yMOD != playerY){
+      bounds += 0x08; //up go to down
+    }
+    if(bounds != 0x00) changeBackground(bounds);
+
     playerX %= 130;
     playerY %= 130;
+    ///////////////////////////////////////////////////
+
+    
     break;
   default:
     break;
