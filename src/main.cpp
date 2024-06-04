@@ -99,6 +99,9 @@ uint16_t background_color = 0x001F;
 int joystickThreshold = 100;
 int move;
 
+//RANDOM NUMBER GENERATOR
+int _state = 22;
+
 //////////////////////////////////////
 
 void generateNewEnemies(uint8_t dir){
@@ -147,11 +150,30 @@ void killAllEnemies(){
   return;
 }
 
+int rand(){
+  int c = 74;
+  int a = 75;
+  int32_t m = 65537;
+  serial_println(_state);
+  _state = (_state*a + c) % m;
+  return _state;
+}
+
+void enemyRoutine(_player* enemy){
+  if(move == 0x00) return;
+  int random = rand() % 4;
+  if(random == 0) enemy->X += enemy->speed;
+  if(random == 1) enemy->X -= enemy->speed;
+  if(random == 2) enemy->Y += enemy->speed;
+  if(random == 3) enemy->Y -= enemy->speed;
+
+  enemy->X %= 130;
+  enemy->Y %= 130;
+}
+
 bool qFull(){ return !(q.back < MAX_Q);}
 
 bool qEmpty(){ return q.back <= -1;}
-
-
 
 void push (void(*draw)()){
   
@@ -644,7 +666,7 @@ int Tick_Enemy_Manager(int state){
       
       if(enemies[i].dead) continue;
       //do enemy routine check
-
+      enemyRoutine(enemies+i);
       //add to draw
 
     }
