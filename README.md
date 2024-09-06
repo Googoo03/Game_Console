@@ -12,13 +12,19 @@ So, when given the opportunity to build a game using embedded systems hardware, 
 
 Before I delve into the design process of this project, let me showcase the final product.
 
-![IMG_1045](https://github.com/user-attachments/assets/835b7fb2-3f14-4c5a-9501-3da85fc3aa5b)
+![Zoida_Off](https://github.com/user-attachments/assets/c531448d-b6f0-4d78-b2d2-9df4d20e0a24)
+
 
 ## Design Process
+
+When designing this project, I wanted to mimic the original NES controller as much as possible. This resulted in a joystick on the left side (instead of the traditional Directional-Pad) and 2 buttons on the right of the screen. The joystick controlled player movement, and the buttons controlled the player abilites such as attacking.
 
 ### Procedural Generation
 
 To create the varied landscapes, and make the player not feel as though they are walking in an infinite void, procedural generation techniques were used to create scattered rocks on the ground. I used a previously created Perlin Noise algorithm used in one of my other projects, Fantasma, and tweaked the parameters to make the rocks few and far between. Each perlin noise value was simply clipped, if it passed a certain threshold, then the background tile at that location would be a rock, and grass otherwise.
+
+![Zoida_Procedural_Generation](https://github.com/user-attachments/assets/022bd7a6-82f0-4d21-b462-aac0475d3492)
+
 
 If time and memory space allowed, additional techniques would've been implemented, namely dungeon generation and more varied land generation, including lakes, rivers, towns, shops, etc. 
 
@@ -31,6 +37,9 @@ Enemies spawn opposite of the player whenever the player enters a new background
 ### Drawing Manager
 
 To maintain cleanliness and readability of code, all drawing that is done on screen was handed to the drawing manager. The drawing manager referenced a stack of drawing operations, which each object can push to when needed, and allowed for all sprites to be drawn in sequence. The stack was composed of function pointers, which allowed for incredible modularity in the code.
+
+![Drawing_Manager](https://github.com/user-attachments/assets/1347946b-cc5b-48a7-9978-cbfc4a57bac1)
+
 
 ### Limitations & Compromises
 
