@@ -49,4 +49,8 @@ I overcame the graphical limitation by only storing the sprites at half resoluti
 
 At the end, the project meet the 32KB limit, and had no impedence on the quality of the project.
 
+### Demo Video
+
+[![Watch the video]](https://youtu.be/CkpDbP_w0i8)
+
 
